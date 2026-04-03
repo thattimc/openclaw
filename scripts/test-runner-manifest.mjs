@@ -1,9 +1,13 @@
 import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.mjs";
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
+export const cliStartupBenchManifestPath = "test/fixtures/cli-startup-bench.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
 export const channelTimingManifestPath = "test/fixtures/test-timings.channels.json";
+export const extensionTimingManifestPath = "test/fixtures/test-timings.extensions.json";
 export const unitMemoryHotspotManifestPath = "test/fixtures/test-memory-hotspots.unit.json";
+export const extensionMemoryHotspotManifestPath =
+  "test/fixtures/test-memory-hotspots.extensions.json";
 
 const defaultTimingManifest = {
   config: "vitest.unit.config.ts",
@@ -15,9 +19,19 @@ const defaultChannelTimingManifest = {
   defaultDurationMs: 3000,
   files: {},
 };
+const defaultExtensionTimingManifest = {
+  config: "vitest.extensions.config.ts",
+  defaultDurationMs: 1000,
+  files: {},
+};
 const defaultMemoryHotspotManifest = {
   config: "vitest.unit.config.ts",
   defaultMinDeltaKb: 256 * 1024,
+  files: {},
+};
+const defaultExtensionMemoryHotspotManifest = {
+  config: "vitest.extensions.config.ts",
+  defaultMinDeltaKb: 1024 * 1024,
   files: {},
 };
 
@@ -137,12 +151,16 @@ export function loadChannelTimingManifest() {
   return loadTimingManifest(channelTimingManifestPath, defaultChannelTimingManifest);
 }
 
-export function loadUnitMemoryHotspotManifest() {
-  const raw = tryReadJsonFile(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
+export function loadExtensionTimingManifest() {
+  return loadTimingManifest(extensionTimingManifestPath, defaultExtensionTimingManifest);
+}
+
+const loadMemoryHotspotManifest = (manifestPath, fallbackManifest) => {
+  const raw = tryReadJsonFile(manifestPath, fallbackManifest);
   const defaultMinDeltaKb =
     Number.isFinite(raw.defaultMinDeltaKb) && raw.defaultMinDeltaKb > 0
       ? raw.defaultMinDeltaKb
-      : defaultMemoryHotspotManifest.defaultMinDeltaKb;
+      : fallbackManifest.defaultMinDeltaKb;
   const files = Object.fromEntries(
     Object.entries(raw.files ?? {})
       .map(([file, value]) => {
@@ -167,14 +185,22 @@ export function loadUnitMemoryHotspotManifest() {
   );
 
   return {
-    config:
-      typeof raw.config === "string" && raw.config
-        ? raw.config
-        : defaultMemoryHotspotManifest.config,
+    config: typeof raw.config === "string" && raw.config ? raw.config : fallbackManifest.config,
     generatedAt: typeof raw.generatedAt === "string" ? raw.generatedAt : "",
     defaultMinDeltaKb,
     files,
   };
+};
+
+export function loadUnitMemoryHotspotManifest() {
+  return loadMemoryHotspotManifest(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
+}
+
+export function loadExtensionMemoryHotspotManifest() {
+  return loadMemoryHotspotManifest(
+    extensionMemoryHotspotManifestPath,
+    defaultExtensionMemoryHotspotManifest,
+  );
 }
 
 export function selectTimedHeavyFiles({
