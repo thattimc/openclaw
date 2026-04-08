@@ -1,8 +1,9 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
-import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
+import type { ConfiguredModelProviderRequest } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -172,7 +173,7 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
 }
 
 export function sanitizeConfiguredProviderRequest(
-  request: ConfiguredProviderRequest | ProviderRequestTransportOverrides | undefined,
+  request: ConfiguredModelProviderRequest | ProviderRequestTransportOverrides | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     return undefined;
@@ -297,6 +298,12 @@ export function sanitizeConfiguredProviderRequest(
   };
 }
 
+export function sanitizeConfiguredModelProviderRequest(
+  request: ConfiguredModelProviderRequest | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  return sanitizeConfiguredProviderRequest(request);
+}
+
 export function mergeProviderRequestOverrides(
   ...overrides: Array<ProviderRequestTransportOverrides | undefined>
 ): ProviderRequestTransportOverrides | undefined {
@@ -352,7 +359,7 @@ export function mergeProviderRequestHeaders(
       merged = Object.create(null) as Record<string, string>;
     }
     for (const [key, value] of Object.entries(headers)) {
-      const normalizedKey = key.toLowerCase();
+      const normalizedKey = normalizeLowercaseStringOrEmpty(key);
       if (FORBIDDEN_HEADER_KEYS.has(normalizedKey)) {
         continue;
       }
@@ -490,12 +497,12 @@ function applyResolvedAuthHeader(
     return headers;
   }
   const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
-  const keysToDelete = new Set([auth.headerName.toLowerCase()]);
+  const keysToDelete = new Set([normalizeLowercaseStringOrEmpty(auth.headerName)]);
   if (auth.mode === "header") {
     keysToDelete.add("authorization");
   }
   for (const key of Object.keys(next)) {
-    if (keysToDelete.has(key.toLowerCase())) {
+    if (keysToDelete.has(normalizeLowercaseStringOrEmpty(key))) {
       delete next[key];
     }
   }
@@ -595,12 +602,12 @@ export function resolveProviderRequestPolicyConfig(
     auth,
   );
   const protectedAttributionKeys = new Set(
-    Object.keys(policy.attributionHeaders ?? {}).map((key) => key.toLowerCase()),
+    Object.keys(policy.attributionHeaders ?? {}).map((key) => normalizeLowercaseStringOrEmpty(key)),
   );
   const unprotectedCallerHeaders = params.callerHeaders
     ? Object.fromEntries(
         Object.entries(params.callerHeaders).filter(
-          ([key]) => !protectedAttributionKeys.has(key.toLowerCase()),
+          ([key]) => !protectedAttributionKeys.has(normalizeLowercaseStringOrEmpty(key)),
         ),
       )
     : undefined;
@@ -623,7 +630,7 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? Boolean(params.baseUrl?.trim()),
+    allowPrivateNetwork: params.allowPrivateNetwork ?? false,
   };
 }
 
@@ -677,4 +684,30 @@ export function resolveProviderRequestHeaders(params: {
     precedence: params.precedence,
     request: params.request,
   }).headers;
+}
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestTransport",
+);
+
+type ModelWithProviderRequestTransport = {
+  [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ProviderRequestTransportOverrides;
+};
+
+export function attachModelProviderRequestTransport<TModel extends object>(
+  model: TModel,
+  request: ProviderRequestTransportOverrides | undefined,
+): TModel {
+  if (!request) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderRequestTransport;
+  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
+  return next;
+}
+
+export function getModelProviderRequestTransport(
+  model: object,
+): ProviderRequestTransportOverrides | undefined {
+  return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
