@@ -5,9 +5,10 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
@@ -71,8 +72,10 @@ export function buildSystemPrompt(params: {
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
+  sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
+  skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
 }) {
@@ -108,10 +111,12 @@ export function buildSystemPrompt(params: {
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
-    acpEnabled: params.config?.acp?.enabled !== false,
+    sourcePath: params.sourcePath,
+    acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),
+    skillsPrompt: params.skillsPrompt,
     userTimezone,
     userTime,
     userTimeFormat,
@@ -156,6 +161,7 @@ export function resolveSystemPromptUsage(params: {
   }
   if (
     !params.backend.systemPromptArg?.trim() &&
+    !params.backend.systemPromptFileArg?.trim() &&
     !params.backend.systemPromptFileConfigKey?.trim()
   ) {
     return null;
@@ -288,7 +294,10 @@ export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
 }): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
-  if (!params.backend.systemPromptFileConfigKey?.trim()) {
+  if (
+    !params.backend.systemPromptFileArg?.trim() &&
+    !params.backend.systemPromptFileConfigKey?.trim()
+  ) {
     return { cleanup: async () => {} };
   }
   const tempDir = await fs.mkdtemp(
@@ -368,6 +377,13 @@ export function buildCliArgs(params: {
     !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
+    params.backend.systemPromptFileArg
+  ) {
+    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
+  } else if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
   ) {
     args.push(
@@ -389,6 +405,18 @@ export function buildCliArgs(params: {
       args.push(params.backend.sessionArg, params.sessionId);
     }
   }
+  if (params.promptArg !== undefined) {
+    let replacedPromptPlaceholder = false;
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === "{prompt}") {
+        args[i] = params.promptArg;
+        replacedPromptPlaceholder = true;
+      }
+    }
+    if (!replacedPromptPlaceholder) {
+      args.push(params.promptArg);
+    }
+  }
   if (params.imagePaths && params.imagePaths.length > 0) {
     const mode = params.backend.imageMode ?? "repeat";
     const imageArg = params.backend.imageArg;
@@ -401,19 +429,6 @@ export function buildCliArgs(params: {
         }
       }
     }
-  }
-  if (params.promptArg !== undefined) {
-    let replacedPromptPlaceholder = false;
-    for (let i = 0; i < args.length; i += 1) {
-      if (args[i] === "{prompt}") {
-        args[i] = params.promptArg;
-        replacedPromptPlaceholder = true;
-      }
-    }
-    if (replacedPromptPlaceholder) {
-      return args;
-    }
-    args.push(params.promptArg);
   }
   return args;
 }

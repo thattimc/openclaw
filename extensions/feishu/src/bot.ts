@@ -2,8 +2,8 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -12,8 +12,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -54,7 +52,13 @@ import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
-import type { FeishuMessageContext, FeishuMessageInfo } from "./types.js";
+export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import {
+  isFeishuGroupChatType,
+  type FeishuMessageContext,
+  type FeishuMessageInfo,
+} from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export { toMessageResourceType } from "./bot-content.js";
@@ -63,49 +67,6 @@ export { toMessageResourceType } from "./bot-content.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-export type FeishuMessageEvent = {
-  sender: {
-    sender_id: {
-      open_id?: string;
-      user_id?: string;
-      union_id?: string;
-    };
-    sender_type?: string;
-    tenant_key?: string;
-  };
-  message: {
-    message_id: string;
-    root_id?: string;
-    parent_id?: string;
-    thread_id?: string;
-    chat_id: string;
-    chat_type: "p2p" | "group" | "private";
-    message_type: string;
-    content: string;
-    create_time?: string;
-    mentions?: Array<{
-      key: string;
-      id: {
-        open_id?: string;
-        user_id?: string;
-        union_id?: string;
-      };
-      name: string;
-      tenant_key?: string;
-    }>;
-  };
-};
-
-export type FeishuBotAddedEvent = {
-  chat_id: string;
-  operator_id: {
-    open_id?: string;
-    user_id?: string;
-    union_id?: string;
-  };
-  external: boolean;
-  operator_tenant_key?: string;
-};
 
 // --- Broadcast support ---
 // Resolve broadcast agent list for a given peer (group) ID.
@@ -161,6 +122,8 @@ export function parseFeishuMessageEvent(
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
+    replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
+    suppressReplyTarget: event.message.suppress_reply_target === true,
     senderId: senderUserId || senderOpenId || "",
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
     // (common in some mobile app deliveries).
@@ -343,7 +306,7 @@ export async function handleFeishuMessage(params: {
   }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
-  const isGroup = ctx.chatType === "group";
+  const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
 
@@ -434,6 +397,7 @@ export async function handleFeishuMessage(params: {
         messageId: ctx.messageId,
         rootId: ctx.rootId,
         threadId: ctx.threadId,
+        chatType: ctx.chatType,
         groupConfig,
         feishuCfg,
       })
@@ -452,7 +416,7 @@ export async function handleFeishuMessage(params: {
   // instead of the delivery/processing time.  Feishu uses a millisecond
   // epoch string; fall back to Date.now() only when the field is absent.
   const messageCreateTimeMs = event.message.create_time
-    ? parseInt(event.message.create_time, 10)
+    ? Number.parseInt(event.message.create_time, 10)
     : Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
@@ -535,7 +499,6 @@ export async function handleFeishuMessage(params: {
       }
       return;
     }
-  } else {
   }
 
   try {
@@ -692,28 +655,22 @@ export async function handleFeishuMessage(params: {
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
       // Sender-scoped topic sessions therefore bind on `chat:topic:root:sender:user`, while
       // configured ACP bindings may still inherit the shared `chat:topic:root` topic session.
-      const threadBinding = getSessionBindingService().resolveByConversation({
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: currentConversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
+      const runtimeRoute = resolveRuntimeConversationBindingRoute({
+        route,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          ...(parentConversationId ? { parentConversationId } : {}),
+        },
       });
-      const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-      if (threadBinding && boundSessionKey) {
-        route = {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-          lastRoutePolicy: deriveLastRoutePolicy({
-            sessionKey: boundSessionKey,
-            mainSessionKey: route.mainSessionKey,
-          }),
-          matchedBy: "binding.channel",
-        };
+      route = runtimeRoute.route;
+      if (runtimeRoute.bindingRecord) {
         configuredBinding = null;
-        getSessionBindingService().touch(threadBinding.bindingId);
         log(
-          `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
+          runtimeRoute.boundSessionKey
+            ? `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${runtimeRoute.boundSessionKey}`
+            : `feishu[${account.accountId}]: plugin-bound conversation ${currentConversationId}`,
         );
       }
     }
@@ -1082,7 +1039,11 @@ export async function handleFeishuMessage(params: {
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+      isTopicSession || configReplyInThread
+        ? (ctx.rootId ??
+          ctx.replyTargetMessageId ??
+          (ctx.suppressReplyTarget ? undefined : ctx.messageId))
+        : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

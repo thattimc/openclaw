@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
   defaultRuntime,
@@ -36,6 +37,12 @@ import type {
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
+import {
+  auditDreamingArtifacts,
+  repairDreamingArtifacts,
+  type DreamingArtifactsAuditSummary,
+  type RepairDreamingArtifactsResult,
+} from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
@@ -158,7 +165,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   skippedPaths: string[];
 }> {
   const sourceFiles = await listHistoricalDailyFiles(params.inputPath);
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-harness-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-harness-"),
+  );
   const memoryDir = path.join(workspaceDir, "memory");
   await fs.mkdir(memoryDir, { recursive: true });
   for (const filePath of sourceFiles) {
@@ -242,6 +251,35 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale lock");
+  }
+  return actions.length > 0 ? actions.join(" · ") : "no changes";
+}
+
+function formatDreamingAuditSummary(audit: DreamingArtifactsAuditSummary): string {
+  const bits = [
+    audit.dreamsPath ? "diary present" : "diary absent",
+    `${audit.sessionCorpusFileCount} corpus files`,
+    audit.sessionIngestionExists ? "ingestion state present" : "ingestion state absent",
+    audit.suspiciousSessionCorpusLineCount > 0
+      ? `${audit.suspiciousSessionCorpusLineCount} suspicious lines`
+      : null,
+  ].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function formatDreamingRepairSummary(repair: RepairDreamingArtifactsResult): string {
+  const actions: string[] = [];
+  if (repair.archivedSessionCorpus) {
+    actions.push("archived session corpus");
+  }
+  if (repair.archivedSessionIngestion) {
+    actions.push("archived ingestion state");
+  }
+  if (repair.archivedDreamsDiary) {
+    actions.push("archived diary");
+  }
+  if (repair.warnings.length > 0) {
+    actions.push(`${repair.warnings.length} warning${repair.warnings.length === 1 ? "" : "s"}`);
   }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
@@ -489,16 +527,11 @@ async function scanMemoryFiles(
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
   const primary = await checkReadableFile(memoryFile);
-  const alt = await checkReadableFile(altMemoryFile);
   if (primary.issue) {
     issues.push(primary.issue);
-  }
-  if (alt.issue) {
-    issues.push(alt.issue);
   }
 
   const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
@@ -564,9 +597,6 @@ async function scanMemoryFiles(
     if (!listedOk) {
       if (primary.exists) {
         files.add(memoryFile);
-      }
-      if (alt.exists) {
-        files.add(altMemoryFile);
       }
     }
     totalFiles = files.size;
@@ -645,6 +675,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     scan?: MemorySourceScan;
     audit?: ShortTermAuditSummary;
     repair?: RepairShortTermPromotionArtifactsResult;
+    dreamingAudit?: DreamingArtifactsAuditSummary;
+    dreamingRepair?: RepairDreamingArtifactsResult;
   }> = [];
 
   for (const agentId of agentIds) {
@@ -720,7 +752,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           : undefined;
         let audit: ShortTermAuditSummary | undefined;
         let repair: RepairShortTermPromotionArtifactsResult | undefined;
+        let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
+        let dreamingRepair: RepairDreamingArtifactsResult | undefined;
         if (workspaceDir) {
+          dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+          if (opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
+            dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
+            dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+          }
           if (opts.fix) {
             repair = await repairShortTermPromotionArtifacts({ workspaceDir });
           }
@@ -739,7 +778,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
                 : undefined,
           });
         }
-        allResults.push({ agentId, status, embeddingProbe, indexError, scan, audit, repair });
+        allResults.push({
+          agentId,
+          status,
+          embeddingProbe,
+          indexError,
+          scan,
+          audit,
+          repair,
+          dreamingAudit,
+          dreamingRepair,
+        });
       },
     });
   }
@@ -759,7 +808,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
-    const { agentId, status, embeddingProbe, indexError, scan, audit, repair } = result;
+    const {
+      agentId,
+      status,
+      embeddingProbe,
+      indexError,
+      scan,
+      audit,
+      repair,
+      dreamingAudit,
+      dreamingRepair,
+    } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
@@ -895,8 +954,28 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
       }
     }
+    if (dreamingAudit) {
+      lines.push(
+        `${label("Dreaming artifacts")} ${info(formatDreamingAuditSummary(dreamingAudit))}`,
+      );
+      lines.push(
+        `${label("Dream corpus")} ${info(shortenHomePath(dreamingAudit.sessionCorpusDir))}`,
+      );
+      lines.push(
+        `${label("Dream ingestion")} ${info(shortenHomePath(dreamingAudit.sessionIngestionPath))}`,
+      );
+      if (dreamingAudit.dreamsPath) {
+        lines.push(`${label("Dream diary")} ${info(shortenHomePath(dreamingAudit.dreamsPath))}`);
+      }
+    }
     if (repair) {
       lines.push(`${label("Repair")} ${info(formatRepairSummary(repair))}`);
+    }
+    if (dreamingRepair) {
+      lines.push(`${label("Dream repair")} ${info(formatDreamingRepairSummary(dreamingRepair))}`);
+      if (dreamingRepair.archiveDir) {
+        lines.push(`${label("Dream archive")} ${info(shortenHomePath(dreamingRepair.archiveDir))}`);
+      }
     }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));
@@ -915,6 +994,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(label("Issues"));
       }
       for (const issue of audit.issues) {
+        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
+      }
+      if (!opts.fix) {
+        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+      }
+    }
+    if (dreamingAudit?.issues.length) {
+      if (!scan?.issues.length && !audit?.issues.length) {
+        lines.push(label("Issues"));
+      }
+      for (const issue of dreamingAudit.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
       if (!opts.fix) {
@@ -1398,7 +1488,7 @@ export async function runMemoryPromoteExplain(
         `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
           rich,
           theme.muted,
-          "(" + String(agentId) + ")",
+          "(" + agentId + ")",
         )}`,
         colorize(rich, theme.accent, candidate.key),
         colorize(
@@ -1720,7 +1810,9 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-backfill-"));
+      const scratchDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
+      );
       try {
         const sourceFiles = await listHistoricalDailyFiles(opts.path);
         if (sourceFiles.length === 0) {

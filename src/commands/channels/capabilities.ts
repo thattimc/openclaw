@@ -9,7 +9,9 @@ import type {
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
+import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -17,6 +19,7 @@ import {
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withoutPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -190,7 +193,7 @@ async function resolveChannelReports(params: {
       includeActions: true,
     }).actions;
     const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
     );
 
     reports.push({
@@ -250,10 +253,31 @@ export async function channelsCapabilitiesCommand(
           });
           if (resolved.configChanged) {
             cfg = resolved.cfg;
-            await replaceConfigFile({
-              nextConfig: cfg,
-              baseHash: (await sourceSnapshotPromise)?.hash,
-            });
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            const nextInstallRecords = cfg.plugins?.installs ?? {};
+            if (shouldMovePluginInstalls) {
+              cfg = withoutPluginInstallRecords(cfg);
+              await commitPluginInstallRecordsWithConfig({
+                nextInstallRecords,
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+            }
+            if (shouldMovePluginInstalls || resolved.pluginInstalled) {
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                ...(shouldMovePluginInstalls ? { installRecords: nextInstallRecords } : {}),
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            }
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();
