@@ -37,6 +37,19 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
+const PROVIDER_OWNER_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["claude-cli", "anthropic"],
+  ["codex-cli", "openai"],
+  ["google-gemini-cli", "google"],
+  ["minimax-portal", "minimax"],
+  ["minimax-portal-auth", "minimax"],
+  ["openai-codex", "openai"],
+]);
+
+function normalizeProviderOwnerPluginId(owner: string): string {
+  return PROVIDER_OWNER_ALIASES.get(owner) ?? owner;
+}
+
 type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
@@ -110,7 +123,7 @@ function resolveProviderDiscoveryFilter(params: {
       }) ?? [];
     if (owners.length > 0) {
       for (const owner of owners) {
-        pluginIds.add(owner);
+        pluginIds.add(normalizeProviderOwnerPluginId(owner));
       }
       continue;
     }
