@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "../plugins/bundled-compat.js";
+import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { resolveEnabledProviderPluginIds } from "../plugins/providers.js";
+
+beforeEach(() => {
+  resetPluginLoaderTestStateForTest();
+});
 
 describe("implicit provider plugin allowlist compatibility", () => {
   it("keeps bundled implicit providers discoverable when plugins.allow is set", () => {

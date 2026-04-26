@@ -9,6 +9,12 @@ export type LiveProviderOwnerContext = {
   ownerCache: Map<string, readonly string[]>;
 };
 
+const BUILT_IN_PROVIDER_OWNER_FALLBACKS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["codex-cli", ["openai"]],
+  ["openai", ["openai"]],
+  ["openai-codex", ["openai"]],
+]);
+
 export function resolveCachedOwningPluginIdsForProvider(
   provider: string,
   context: LiveProviderOwnerContext,
@@ -24,7 +30,9 @@ export function resolveCachedOwningPluginIdsForProvider(
       config: context.config,
       workspaceDir: context.workspaceDir,
       env: context.env,
-    }) ?? [];
+    }) ??
+    BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(normalized) ??
+    [];
   context.ownerCache.set(normalized, owners);
   return owners;
 }
