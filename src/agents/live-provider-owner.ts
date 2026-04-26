@@ -22,6 +22,12 @@ const BUILT_IN_PROVIDER_OWNER_FALLBACKS: ReadonlyMap<string, readonly string[]> 
   ["openai-codex", ["openai"]],
 ]);
 
+function normalizeBuiltInProviderOwnerAliases(owners: readonly string[]): readonly string[] {
+  return [
+    ...new Set(owners.flatMap((owner) => BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(owner) ?? [owner])),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolveCachedOwningPluginIdsForProvider(
   provider: string,
   context: LiveProviderOwnerContext,
@@ -31,15 +37,16 @@ export function resolveCachedOwningPluginIdsForProvider(
   if (cached) {
     return cached;
   }
-  const owners =
+  const owners = normalizeBuiltInProviderOwnerAliases(
     resolveOwningPluginIdsForProvider({
       provider: normalized,
       config: context.config,
       workspaceDir: context.workspaceDir,
       env: context.env,
     }) ??
-    BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(normalized) ??
-    [];
+      BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(normalized) ??
+      [],
+  );
   context.ownerCache.set(normalized, owners);
   return owners;
 }
