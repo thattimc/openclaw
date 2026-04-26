@@ -10,6 +10,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_APP_PRIVATE_KEY_AVAILABLE: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
+  GH_APP_PRIVATE_KEY_FALLBACK_AVAILABLE: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK != '' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
@@ -31,13 +33,14 @@ jobs:
           persist-credentials: false
       - uses: actions/create-github-app-token@v3
         id: app-token
+        if: env.GH_APP_PRIVATE_KEY_AVAILABLE == 'true'
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
       - uses: actions/create-github-app-token@v3
         id: app-token-fallback
-        if: steps.app-token.outcome == 'failure'
+        if: (steps.app-token.outcome == 'failure' || steps.app-token.outcome == 'skipped') && env.GH_APP_PRIVATE_KEY_FALLBACK_AVAILABLE == 'true'
         continue-on-error: true
         with:
           app-id: "2971289"
