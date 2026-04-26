@@ -10,6 +10,16 @@ import {
 } from "../../plugins/loader.test-fixtures.js";
 import { listReadOnlyChannelPluginsForConfig } from "./read-only.js";
 
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+function restoreBundledPluginsDirForTest() {
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    return;
+  }
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+}
+
 function writeExternalSetupChannelPlugin(
   options: {
     setupEntry?: boolean;
@@ -317,10 +327,12 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  restoreBundledPluginsDirForTest();
   resetPluginLoaderTestStateForTest();
 });
 
 afterAll(() => {
+  restoreBundledPluginsDirForTest();
   cleanupPluginLoaderFixturesForTest();
 });
 
@@ -538,6 +550,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
+        includeSetupRuntimeFallback: true,
       },
     );
 
@@ -715,6 +728,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
+        includeSetupRuntimeFallback: true,
       },
     );
 

@@ -8,6 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 
 // ---------------------------------------------------------------------------
 // Mocks (hoisted to module top level)
@@ -69,6 +70,21 @@ function createWorkspaceCatalogEntry(id: string, label: string) {
       order: 1,
     },
     install: { npmSpec: id },
+  };
+}
+
+function createManifestRecord(id: string, channels: string[]): PluginManifestRecord {
+  return {
+    id,
+    channels,
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    origin: "workspace",
+    rootDir: `/tmp/openclaw-test-plugins/${id}`,
+    source: `/tmp/openclaw-test-plugins/${id}/index.js`,
+    manifestPath: `/tmp/openclaw-test-plugins/${id}/openclaw.plugin.json`,
   };
 }
 
@@ -170,7 +186,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     };
     listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
+      plugins: [createManifestRecord("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
 
@@ -220,7 +236,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       },
     }));
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "trusted-telegram-shadow", channels: ["telegram"] }],
+      plugins: [createManifestRecord("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
 
@@ -264,7 +280,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       autoEnabledReasons: {},
     }));
     loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "my-cool-plugin", channels: ["my-cool-plugin"] }],
+      plugins: [createManifestRecord("my-cool-plugin", ["my-cool-plugin"])],
       diagnostics: [],
     });
 

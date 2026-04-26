@@ -9,6 +9,25 @@ export type LiveProviderOwnerContext = {
   ownerCache: Map<string, readonly string[]>;
 };
 
+const BUILT_IN_PROVIDER_OWNER_FALLBACKS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["anthropic", ["anthropic"]],
+  ["claude-cli", ["anthropic"]],
+  ["codex-cli", ["openai"]],
+  ["google", ["google"]],
+  ["google-gemini-cli", ["google"]],
+  ["minimax", ["minimax"]],
+  ["minimax-portal", ["minimax"]],
+  ["minimax-portal-auth", ["minimax"]],
+  ["openai", ["openai"]],
+  ["openai-codex", ["openai"]],
+]);
+
+function normalizeBuiltInProviderOwnerAliases(owners: readonly string[]): readonly string[] {
+  return [
+    ...new Set(owners.flatMap((owner) => BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(owner) ?? [owner])),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolveCachedOwningPluginIdsForProvider(
   provider: string,
   context: LiveProviderOwnerContext,
@@ -18,13 +37,16 @@ export function resolveCachedOwningPluginIdsForProvider(
   if (cached) {
     return cached;
   }
-  const owners =
+  const owners = normalizeBuiltInProviderOwnerAliases(
     resolveOwningPluginIdsForProvider({
       provider: normalized,
       config: context.config,
       workspaceDir: context.workspaceDir,
       env: context.env,
-    }) ?? [];
+    }) ??
+      BUILT_IN_PROVIDER_OWNER_FALLBACKS.get(normalized) ??
+      [],
+  );
   context.ownerCache.set(normalized, owners);
   return owners;
 }
