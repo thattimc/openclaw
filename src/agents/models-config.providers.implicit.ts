@@ -114,6 +114,11 @@ function resolveProviderDiscoveryFilter(params: {
   }
   const pluginIds = new Set<string>();
   for (const id of ids) {
+    const directOwner = normalizeProviderOwnerPluginId(id);
+    if (directOwner !== id) {
+      pluginIds.add(directOwner);
+      continue;
+    }
     const owners =
       resolveOwningPluginIdsForProvider({
         provider: id,
