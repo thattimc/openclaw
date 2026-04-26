@@ -10,7 +10,14 @@ export type LiveProviderOwnerContext = {
 };
 
 const BUILT_IN_PROVIDER_OWNER_FALLBACKS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["anthropic", ["anthropic"]],
+  ["claude-cli", ["anthropic"]],
   ["codex-cli", ["openai"]],
+  ["google", ["google"]],
+  ["google-gemini-cli", ["google"]],
+  ["minimax", ["minimax"]],
+  ["minimax-portal", ["minimax"]],
+  ["minimax-portal-auth", ["minimax"]],
   ["openai", ["openai"]],
   ["openai-codex", ["openai"]],
 ]);
